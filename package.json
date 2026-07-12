@@ -1,0 +1,12 @@
+{
+  "name": "self-healing-cache",
+  "version": "1.0.0",
+  "description": "A self-healing distributed cache with consistent hashing, replication, and gossip-based failure detection",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test",
+    "start": "node src/index.js"
+  },
+  "license": "MIT"
+}
