@@ -6,7 +6,23 @@
   "main": "src/index.js",
   "scripts": {
     "test": "node --test",
-    "start": "node src/index.js"
+    "start": "node server/index.js"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "directories": {
+    "test": "tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ishantgarg2332/self-healing-cache.git"
+  },
+  "keywords": [],
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/ishantgarg2332/self-healing-cache/issues"
+  },
+  "homepage": "https://github.com/ishantgarg2332/self-healing-cache#readme",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
 }

@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Self-Healing Cache — Live Ring</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --panel: #111722;
+    --panel-edge: #1e2836;
+    --ink: #e6edf5;
+    --ink-dim: #7d8b9e;
+    --ink-faint: #4a5666;
+    --alive: #4de5c8;
+    --alive-glow: rgba(77, 229, 200, 0.35);
+    --suspected: #e5b54d;
+    --dead: #e5556a;
+    --dead-glow: rgba(229, 85, 106, 0.3);
+    --key: #6ea8fe;
+    --wire: #223047;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace;
+    line-height: 1.5;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(circle at 20% 0%, rgba(77, 229, 200, 0.04), transparent 40%),
+      radial-gradient(circle at 100% 100%, rgba(110, 168, 254, 0.04), transparent 40%);
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 64px; }
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    flex-wrap: wrap; gap: 8px 24px;
+    border-bottom: 1px solid var(--panel-edge); padding-bottom: 20px; margin-bottom: 28px;
+  }
+  h1 { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
+  h1 .tag { color: var(--alive); font-weight: 500; }
+  .sub { font-size: 12px; color: var(--ink-dim); font-weight: 400; max-width: 46ch; }
+  .conn { font-size: 11px; color: var(--ink-faint); }
+  .conn.ok { color: var(--alive); }
+  .conn.down { color: var(--dead); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 28px; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  .stage { background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 10px; padding: 8px; position: relative; overflow: hidden; }
+  .stage svg { display: block; width: 100%; height: auto; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; padding: 10px 14px 4px; font-size: 11px; color: var(--ink-dim); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .dot.alive { background: var(--alive); box-shadow: 0 0 6px var(--alive-glow); }
+  .dot.suspected { background: var(--suspected); }
+  .dot.dead { background: var(--dead); }
+  .dot.key { background: var(--key); }
+  .side { display: flex; flex-direction: column; gap: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 10px; padding: 18px; }
+  .card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-faint); margin-bottom: 14px; font-weight: 600; }
+  .stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: 5px 0; font-size: 13px; }
+  .stat-row .label { color: var(--ink-dim); }
+  .stat-row .val { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat-row .val.accent { color: var(--alive); }
+  .controls { display: flex; flex-direction: column; gap: 10px; }
+  .field { display: flex; gap: 8px; }
+  input[type="text"] {
+    flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--panel-edge);
+    border-radius: 6px; color: var(--ink); font-family: inherit; font-size: 13px; padding: 8px 10px;
+  }
+  input[type="text"]:focus { outline: none; border-color: var(--alive); box-shadow: 0 0 0 2px var(--alive-glow); }
+  input::placeholder { color: var(--ink-faint); }
+  button {
+    font-family: inherit; font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+    border: 1px solid var(--panel-edge); background: var(--panel-edge); color: var(--ink);
+    border-radius: 6px; padding: 8px 12px; cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, transform 0.05s; white-space: nowrap;
+  }
+  button:hover { background: #29374a; border-color: #3a4c63; }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: var(--alive); color: #06231d; border-color: var(--alive); }
+  button.primary:hover { background: #6bf0d6; }
+  button.danger { color: var(--dead); border-color: #3a2530; }
+  button.danger:hover { background: #2a1a20; border-color: var(--dead); }
+  .node-list { display: flex; flex-direction: column; gap: 6px; }
+  .node-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 7px 10px; background: var(--bg); border: 1px solid var(--panel-edge); border-radius: 6px; font-size: 12px;
+  }
+  .node-item .id { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+  .node-item .meta { color: var(--ink-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .node-item button { padding: 4px 8px; font-size: 11px; }
+  .log { font-size: 11px; line-height: 1.7; max-height: 200px; overflow-y: auto; color: var(--ink-dim); }
+  .log .line { display: flex; gap: 8px; padding: 1px 0; }
+  .log .t { color: var(--ink-faint); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .log .m.heal { color: var(--alive); }
+  .log .m.fail { color: var(--dead); }
+  .log .m.warn { color: var(--suspected); }
+  .hint { font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
+  .node-arc { transition: opacity 0.4s ease; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+  .suspected-pulse { animation: pulse 1s ease-in-out infinite; }
+  .keydot { transition: cx 0.6s cubic-bezier(0.4,0,0.2,1), cy 0.6s cubic-bezier(0.4,0,0.2,1); }
+  @media (prefers-reduced-motion: reduce) { .keydot { transition: none; } .suspected-pulse { animation: none; } }
+  .foot { margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--panel-edge); font-size: 11px; color: var(--ink-faint); line-height: 1.7; }
+  .foot code { color: var(--ink-dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>self-healing cache <span class="tag">// live ring</span></h1>
+      <p class="sub">Consistent hashing with replication and SWIM-style failure detection. Kill a node and watch the keys re-home.</p>
+    </div>
+    <div class="sub" style="text-align:right">
+      one cluster, served over HTTP<br>
+      <span class="conn" id="conn">connecting…</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <div>
+      <div class="stage">
+        <svg id="ring" viewBox="0 0 520 520" role="img" aria-label="Hash ring showing nodes and keys">
+          <circle cx="260" cy="260" r="180" fill="none" stroke="var(--wire)" stroke-width="1.5"/>
+          <g id="node-arcs"></g>
+          <g id="key-dots"></g>
+          <g id="node-labels"></g>
+          <text id="center-count" x="260" y="252" text-anchor="middle" fill="var(--ink)" font-size="34" font-weight="700" font-family="inherit">0</text>
+          <text x="260" y="274" text-anchor="middle" fill="var(--ink-faint)" font-size="11" font-family="inherit" letter-spacing="0.15em">NODES</text>
+        </svg>
+        <div class="legend">
+          <span><i class="dot alive"></i> alive</span>
+          <span><i class="dot suspected"></i> suspected</span>
+          <span><i class="dot dead"></i> dead</span>
+          <span><i class="dot key"></i> key</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <h2>Cluster</h2>
+        <div class="stat-row"><span class="label">nodes alive</span><span class="val accent" id="s-nodes">0</span></div>
+        <div class="stat-row"><span class="label">keys stored</span><span class="val" id="s-keys">0</span></div>
+        <div class="stat-row"><span class="label">replication factor</span><span class="val" id="s-rf">3</span></div>
+        <div class="stat-row"><span class="label">total replicas</span><span class="val" id="s-replicas">0</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Add data</h2>
+        <div class="controls">
+          <div class="field">
+            <input type="text" id="key-input" placeholder="key" aria-label="key" autocomplete="off">
+            <input type="text" id="val-input" placeholder="value" aria-label="value" autocomplete="off">
+          </div>
+          <button class="primary" id="btn-set">Set key</button>
+          <button id="btn-seed">Seed 20 random keys</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Nodes</h2>
+        <div class="controls" style="margin-bottom:12px">
+          <button id="btn-add">Add node</button>
+        </div>
+        <div class="node-list" id="node-list"></div>
+        <p class="hint" id="node-hint"></p>
+      </div>
+
+      <div class="card">
+        <h2>Event log</h2>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="foot">
+    A Node.js distributed cache (50 passing tests) running server-side behind an Express API; this page polls it twice a second. The logic — ring placement, replication, rebalancing, SWIM-style failure detection — is real; the cluster is a single-process simulation (in-memory nodes, timer heartbeats). Source: <code>github.com/&lt;you&gt;/self-healing-cache</code>
+  </p>
+</div>
+
+<script type="module">
+// ============================================================================
+//  API CLIENT — the cache runs on the server; this page drives it over HTTP
+//  and polls /api/state to render. No cache logic lives here.
+// ============================================================================
+const API = {
+  async state()          { return get('/api/state'); },
+  async addNode()        { return post('/api/nodes', {}); },
+  async killNode(id)     { return post(`/api/nodes/${encodeURIComponent(id)}/kill`, {}); },
+  async removeNode(id)   { return del(`/api/nodes/${encodeURIComponent(id)}`); },
+  async setKey(key, value) { return post('/api/keys', { key, value }); },
+  async seed()           { return post('/api/seed', { count: 20 }); },
+};
+async function get(url)        { const r = await fetch(url); if (!r.ok) throw await err(r); return r.json(); }
+async function post(url, body) { const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!r.ok) throw await err(r); return r.json(); }
+async function del(url)        { const r = await fetch(url, { method: 'DELETE' }); if (!r.ok) throw await err(r); return r.json(); }
+async function err(r) { let m = r.statusText; try { m = (await r.json()).error || m; } catch {} return new Error(m); }
+
+// ============================================================================
+//  RENDER
+// ============================================================================
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const CX = 260, CY = 260, R = 180;
+const arcsG = document.getElementById('node-arcs');
+const keysG = document.getElementById('key-dots');
+const labelsG = document.getElementById('node-labels');
+const NODE_COLORS = ['#4de5c8','#6ea8fe','#c78bff','#ffa657','#5fd68a','#ff85a1','#e5d24d','#4dc8e5'];
+
+let lastState = null;
+let colorMap = new Map(); // stable color per node id
+
+function pointToXY(point, ringMax, radius = R) {
+  const angle = (point / ringMax) * 2 * Math.PI - Math.PI / 2;
+  return { x: CX + radius * Math.cos(angle), y: CY + radius * Math.sin(angle) };
+}
+function colorFor(id) {
+  if (!colorMap.has(id)) colorMap.set(id, NODE_COLORS[colorMap.size % NODE_COLORS.length]);
+  return colorMap.get(id);
+}
+
+function render(state) {
+  const { nodes, keys, ringMax, replicationFactor } = state;
+
+  arcsG.innerHTML = '';
+  labelsG.innerHTML = '';
+  for (const node of nodes) {
+    const st = node.state;
+    const { x, y } = pointToXY(node.ringPoint, ringMax, R);
+    const color = st === 'dead' ? 'var(--dead)' : st === 'suspected' ? 'var(--suspected)' : colorFor(node.id);
+
+    const c = document.createElementNS(SVG_NS, 'circle');
+    c.setAttribute('cx', x); c.setAttribute('cy', y);
+    c.setAttribute('r', st === 'suspected' ? 11 : 9);
+    c.setAttribute('fill', color);
+    c.setAttribute('class', 'node-arc' + (st === 'suspected' ? ' suspected-pulse' : ''));
+    if (st !== 'suspected') c.setAttribute('filter', 'drop-shadow(0 0 6px ' + color + ')');
+    arcsG.appendChild(c);
+
+    const lp = pointToXY(node.ringPoint, ringMax, R + 26);
+    const t = document.createElementNS(SVG_NS, 'text');
+    t.setAttribute('x', lp.x); t.setAttribute('y', lp.y + 4);
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('fill', st === 'suspected' ? 'var(--suspected)' : 'var(--ink-dim)');
+    t.setAttribute('font-size', '10'); t.setAttribute('font-family', 'inherit');
+    t.textContent = node.id;
+    labelsG.appendChild(t);
+  }
+
+  keysG.innerHTML = '';
+  for (const k of keys) {
+    const { x, y } = pointToXY(k.ringPoint, ringMax, R);
+    const dot = document.createElementNS(SVG_NS, 'circle');
+    dot.setAttribute('class', 'keydot');
+    dot.setAttribute('cx', x); dot.setAttribute('cy', y);
+    dot.setAttribute('r', 3.2);
+    dot.setAttribute('fill', k.primary ? colorFor(k.primary) : 'var(--ink-faint)');
+    dot.setAttribute('opacity', '0.85');
+    keysG.appendChild(dot);
+  }
+
+  const aliveCount = nodes.filter(n => n.state !== 'dead').length;
+  document.getElementById('center-count').textContent = aliveCount;
+  document.getElementById('s-nodes').textContent = aliveCount;
+  document.getElementById('s-keys').textContent = keys.length;
+  document.getElementById('s-rf').textContent = replicationFactor;
+  document.getElementById('s-replicas').textContent = keys.reduce((a, k) => a + k.replicaCount, 0);
+
+  renderNodeList(nodes);
+}
+
+function renderNodeList(nodes) {
+  const list = document.getElementById('node-list');
+  list.innerHTML = '';
+  for (const node of nodes) {
+    const st = node.state;
+    const row = document.createElement('div');
+    row.className = 'node-item';
+    const dotClass = st === 'dead' ? 'dead' : st === 'suspected' ? 'suspected' : 'alive';
+    row.innerHTML =
+      `<span class="id"><i class="dot ${dotClass}"></i>${node.id}</span>` +
+      `<span class="meta">${node.heldKeys} keys · ${st}</span>`;
+    const btn = document.createElement('button');
+    btn.className = 'danger';
+    btn.textContent = 'Kill';
+    btn.disabled = nodes.length <= 1;
+    btn.onclick = () => killNode(node.id);
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
+  document.getElementById('node-hint').textContent = nodes.length <= 1
+    ? 'Add another node before killing this one.'
+    : 'Killing stops heartbeats — the detector notices, then heals.';
+}
+
+// ============================================================================
+//  ACTIONS (optimistic log; state refreshes via poll)
+// ============================================================================
+async function addNode() {
+  try { const { id } = await API.addNode(); log(`node ${id} joined`, 'heal'); await refresh(); }
+  catch (e) { log('add failed: ' + e.message, 'fail'); }
+}
+async function killNode(id) {
+  try { await API.killNode(id); log(`node ${id} went silent (killed)`, 'warn'); }
+  catch (e) { log('kill failed: ' + e.message, 'fail'); }
+}
+async function setKey(key, value) {
+  if (!key) return;
+  try { await API.setKey(key, value); log(`set ${key} = ${value}`); await refresh(); }
+  catch (e) { log('set failed: ' + e.message, 'fail'); }
+}
+async function seed() {
+  try { const { seeded } = await API.seed(); log(`seeded ${seeded} random keys`); await refresh(); }
+  catch (e) { log('seed failed: ' + e.message, 'fail'); }
+}
+
+// ============================================================================
+//  EVENT LOG — infer node deaths/recoveries by diffing polled state
+// ============================================================================
+const logEl = document.getElementById('log');
+function log(msg, kind = '') {
+  const t = new Date().toTimeString().slice(0, 8);
+  const line = document.createElement('div');
+  line.className = 'line';
+  line.innerHTML = `<span class="t">${t}</span><span class="m ${kind}">${msg}</span>`;
+  logEl.prepend(line);
+  while (logEl.children.length > 40) logEl.removeChild(logEl.lastChild);
+}
+
+function diffLog(prev, next) {
+  if (!prev) return;
+  const prevStates = new Map(prev.nodes.map(n => [n.id, n.state]));
+  const nextIds = new Set(next.nodes.map(n => n.id));
+  for (const n of next.nodes) {
+    const was = prevStates.get(n.id);
+    if (was && was !== n.state) {
+      if (n.state === 'suspected') log(`node ${n.id} suspected`, 'warn');
+      else if (was === 'suspected' && n.state === 'alive') log(`node ${n.id} recovered`, 'heal');
+    }
+  }
+  // nodes that vanished (detector evicted them)
+  for (const p of prev.nodes) {
+    if (!nextIds.has(p.id)) log(`node ${p.id} declared dead — healed`, 'fail');
+  }
+}
+
+// ============================================================================
+//  POLL LOOP
+// ============================================================================
+const connEl = document.getElementById('conn');
+async function refresh() {
+  try {
+    const state = await API.state();
+    connEl.textContent = 'connected';
+    connEl.className = 'conn ok';
+    diffLog(lastState, state);
+    lastState = state;
+    render(state);
+  } catch (e) {
+    connEl.textContent = 'server unreachable';
+    connEl.className = 'conn down';
+  }
+}
+
+// wire controls
+document.getElementById('btn-add').onclick = addNode;
+document.getElementById('btn-seed').onclick = seed;
+document.getElementById('btn-set').onclick = () => {
+  const k = document.getElementById('key-input');
+  const v = document.getElementById('val-input');
+  setKey(k.value.trim(), v.value.trim() || '—');
+  k.value = ''; v.value = ''; k.focus();
+};
+document.getElementById('key-input').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('val-input').focus(); });
+document.getElementById('val-input').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('btn-set').click(); });
+
+// go
+refresh();
+setInterval(refresh, 500);
+</script>
+</body>
+</html>
